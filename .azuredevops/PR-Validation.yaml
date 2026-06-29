@@ -1,0 +1,41 @@
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - bicep/**
+
+variables:
+  serviceConnection: 'Azure-Service-Connection'
+  resourceGroup: 'rg-avd-prd'
+
+jobs:
+  - job: ValidateBicep
+    displayName: Validate Bicep (PR)
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - task: AzureCLI@2
+        displayName: az bicep restore + build (lint)
+        inputs:
+          azureSubscription: $(serviceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            az bicep restore --file bicep/main.bicep
+            az bicep build --file bicep/main.bicep
+
+      - task: AzureCLI@2
+        displayName: az deployment group validate
+        inputs:
+          azureSubscription: $(serviceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            az deployment group validate \
+              --resource-group $(resourceGroup) \
+              --template-file bicep/main.bicep \
+              --parameters bicep/main.bicepparam
