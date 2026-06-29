@@ -1,24 +1,32 @@
 using './main.bicep'
 
-// ── Host Pool ─────────────────────────────────────────────────────────────────
-param hostPoolName           = 'hp-avd-prd'
+// ── Identity ──────────────────────────────────────────────────────────────────
+param namePrefix         = 'avd-prd'
+param environment        = 'prd'
+
+// ── Networking ────────────────────────────────────────────────────────────────
+param deployNetworking              = true
+param vnetAddressPrefix             = '10.20.0.0/16'
+param sessionHostSubnetPrefix       = '10.20.1.0/24'
+param privateEndpointSubnetPrefix   = '10.20.2.0/24'
+// param existingSubnetId           = '/subscriptions/.../subnets/snet-avd-hosts'  // when deployNetworking = false
+
+// ── Storage (FSLogix) ─────────────────────────────────────────────────────────
+param deployStorage          = true
+param filePrivateDnsZoneId   = ''   // Set to private DNS zone resource ID to enable private endpoint
+
+// ── AVD Control Plane ─────────────────────────────────────────────────────────
 param hostPoolType           = 'Pooled'
-param loadBalancerType       = 'BreadthFirst'
 param maxSessionLimit        = 10
-param hostPoolFriendlyName   = 'AVD Host Pool'
-param preferredAppGroupType  = 'Desktop'
-
-// ── Workspace ─────────────────────────────────────────────────────────────────
-param workspaceName          = 'ws-avd-prd'
-param workspaceFriendlyName  = 'AVD Workspace'
-
-// ── Application Group ─────────────────────────────────────────────────────────
-param appGroupName           = 'ag-avd-desktop-prd'
-
-// ── Scaling Plan ──────────────────────────────────────────────────────────────
-param deployScalingPlan      = false
-param scalingPlanName        = 'sp-avd-prd'
+param deployScalingPlan      = true
 param scalingPlanTimeZone    = 'GMT Standard Time'
 
-// ── Shared ────────────────────────────────────────────────────────────────────
-param environment            = 'prd'
+// ── Session Hosts ─────────────────────────────────────────────────────────────
+param deploySessionHosts     = true
+param sessionHostCount       = 2
+param vmSize                 = 'Standard_D4s_v5'
+param adminUsername          = 'avdadmin'
+param adminPassword          = ''   // Set via pipeline secret or az cli --parameters adminPassword=...
+
+// ── Monitoring ────────────────────────────────────────────────────────────────
+param logAnalyticsWorkspaceId = ''  // Set to enable diagnostics and VM Insights

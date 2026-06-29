@@ -6,52 +6,71 @@ targetScope = 'resourceGroup'
 @description('Azure region for all resources')
 param location string = resourceGroup().location
 
-// ── Host Pool ─────────────────────────────────────────────────────────────────
+@description('Short name prefix used across all resource names (e.g. avd-prd)')
+param namePrefix string
 
-@description('Name of the AVD host pool')
-param hostPoolName string
+// ── Networking ────────────────────────────────────────────────────────────────
 
-@description('Pooled (shared) or Personal (dedicated) host pool')
+@description('Deploy a new VNet, or bring your own by setting deployNetworking to false and providing subnetId')
+param deployNetworking bool = true
+
+@description('VNet address space when deployNetworking is true')
+param vnetAddressPrefix string = '10.20.0.0/16'
+
+@description('Session host subnet prefix')
+param sessionHostSubnetPrefix string = '10.20.1.0/24'
+
+@description('Private endpoint subnet prefix')
+param privateEndpointSubnetPrefix string = '10.20.2.0/24'
+
+@description('Existing subnet resource ID (used when deployNetworking is false)')
+param existingSubnetId string = ''
+
+// ── Storage (FSLogix) ─────────────────────────────────────────────────────────
+
+@description('Deploy Azure Files storage for FSLogix profiles')
+param deployStorage bool = true
+
+@description('Private DNS zone resource ID for file.core.windows.net (leave empty to skip private endpoint)')
+param filePrivateDnsZoneId string = ''
+
+// ── AVD Control Plane ─────────────────────────────────────────────────────────
+
+@description('Pooled or Personal host pool')
 @allowed(['Pooled', 'Personal'])
 param hostPoolType string = 'Pooled'
 
-@description('Load balancing algorithm for Pooled pools')
-@allowed(['BreadthFirst', 'DepthFirst'])
-param loadBalancerType string = 'BreadthFirst'
-
-@description('Maximum number of sessions per session host (Pooled only)')
+@description('Maximum sessions per host (Pooled only)')
 param maxSessionLimit int = 10
 
-@description('Friendly display name shown in the client')
-param hostPoolFriendlyName string = ''
+@description('Deploy auto-scaling plan (Pooled only)')
+param deployScalingPlan bool = true
 
-@description('Preferred app group type for session hosts')
-@allowed(['Desktop', 'RailApplications'])
-param preferredAppGroupType string = 'Desktop'
-
-// ── Workspace ─────────────────────────────────────────────────────────────────
-
-@description('Name of the AVD workspace')
-param workspaceName string
-
-@description('Friendly name for the workspace shown in the client')
-param workspaceFriendlyName string = ''
-
-// ── Application Group ─────────────────────────────────────────────────────────
-
-@description('Name of the desktop application group')
-param appGroupName string
-
-// ── Scaling Plan ──────────────────────────────────────────────────────────────
-
-@description('Deploy a scaling plan to auto-scale session hosts')
-param deployScalingPlan bool = false
-
-@description('Name of the scaling plan (required when deployScalingPlan is true)')
-param scalingPlanName string = ''
-
-@description('Time zone for the scaling plan schedule (e.g. GMT Standard Time)')
+@description('Scaling plan time zone')
 param scalingPlanTimeZone string = 'GMT Standard Time'
+
+// ── Session Hosts ─────────────────────────────────────────────────────────────
+
+@description('Deploy session host VMs')
+param deploySessionHosts bool = true
+
+@description('Number of session hosts to deploy')
+param sessionHostCount int = 2
+
+@description('VM size for session hosts')
+param vmSize string = 'Standard_D4s_v5'
+
+@description('Local admin username for session host VMs')
+param adminUsername string
+
+@secure()
+@description('Local admin password for session host VMs')
+param adminPassword string
+
+// ── Monitoring ────────────────────────────────────────────────────────────────
+
+@description('Log Analytics workspace resource ID — leave empty to skip diagnostics')
+param logAnalyticsWorkspaceId string = ''
 
 // ── Shared ────────────────────────────────────────────────────────────────────
 
@@ -61,94 +80,78 @@ param environment string
 param tags object = {
   environment: environment
   managedBy: 'bicep'
-  repo: 'avd'
+  repo: 'azure-virtual-desktop'
 }
 
-// ── Host Pool ─────────────────────────────────────────────────────────────────
+// ── Networking ────────────────────────────────────────────────────────────────
 
-module hostPool 'br/public:avm/res/desktop-virtualization/host-pool:0.3.0' = {
-  name: 'hostPool'
+module networking 'modules/networking.bicep' = if (deployNetworking) {
+  name: 'networking'
   params: {
-    name: hostPoolName
     location: location
+    namePrefix: namePrefix
+    vnetAddressPrefix: vnetAddressPrefix
+    sessionHostSubnetPrefix: sessionHostSubnetPrefix
+    privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
+    tags: tags
+  }
+}
+
+var subnetId = deployNetworking ? networking.outputs.sessionHostSubnetId : existingSubnetId
+var peSubnetId = deployNetworking ? networking.outputs.privateEndpointSubnetId : existingSubnetId
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+
+module storage 'modules/storage.bicep' = if (deployStorage) {
+  name: 'storage'
+  params: {
+    location: location
+    namePrefix: namePrefix
+    privateEndpointSubnetId: peSubnetId
+    privateDnsZoneResourceId: filePrivateDnsZoneId
+    tags: tags
+  }
+}
+
+// ── AVD Control Plane ─────────────────────────────────────────────────────────
+
+module avd 'modules/avd-control-plane.bicep' = {
+  name: 'avd-control-plane'
+  params: {
+    location: location
+    namePrefix: namePrefix
     hostPoolType: hostPoolType
-    loadBalancerType: loadBalancerType
     maxSessionLimit: maxSessionLimit
-    friendlyName: empty(hostPoolFriendlyName) ? hostPoolName : hostPoolFriendlyName
-    preferredAppGroupType: preferredAppGroupType
+    deployScalingPlan: deployScalingPlan
+    scalingPlanTimeZone: scalingPlanTimeZone
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     tags: tags
   }
 }
 
-// ── Application Group ─────────────────────────────────────────────────────────
+// ── Session Hosts ─────────────────────────────────────────────────────────────
 
-module appGroup 'br/public:avm/res/desktop-virtualization/application-group:0.2.0' = {
-  name: 'appGroup'
+module sessionHosts 'modules/session-hosts.bicep' = if (deploySessionHosts) {
+  name: 'session-hosts'
   params: {
-    name: appGroupName
     location: location
-    applicationGroupType: 'Desktop'
-    hostPoolResourceId: hostPool.outputs.resourceId
-    tags: tags
-  }
-}
-
-// ── Workspace ─────────────────────────────────────────────────────────────────
-
-module workspace 'br/public:avm/res/desktop-virtualization/workspace:0.3.0' = {
-  name: 'workspace'
-  params: {
-    name: workspaceName
-    location: location
-    friendlyName: empty(workspaceFriendlyName) ? workspaceName : workspaceFriendlyName
-    appGroupResourceIds: [ appGroup.outputs.resourceId ]
-    tags: tags
-  }
-}
-
-// ── Scaling Plan (optional) ───────────────────────────────────────────────────
-
-module scalingPlan 'br/public:avm/res/desktop-virtualization/scaling-plan:0.2.0' = if (deployScalingPlan) {
-  name: 'scalingPlan'
-  params: {
-    name: scalingPlanName
-    location: location
-    timeZone: scalingPlanTimeZone
-    hostPoolType: hostPoolType
-    hostPoolReferences: [
-      {
-        hostPoolArmPath: hostPool.outputs.resourceId
-        scalingPlanEnabled: true
-      }
-    ]
-    schedules: [
-      {
-        name: 'Weekdays'
-        daysOfWeek: [ 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday' ]
-        peakStartTime: { hour: 8, minute: 0 }
-        peakLoadBalancingAlgorithm: 'BreadthFirst'
-        rampUpStartTime: { hour: 7, minute: 0 }
-        rampUpLoadBalancingAlgorithm: 'BreadthFirst'
-        rampUpMinimumHostsPct: 20
-        rampUpCapacityThresholdPct: 60
-        offPeakStartTime: { hour: 18, minute: 0 }
-        offPeakLoadBalancingAlgorithm: 'DepthFirst'
-        rampDownStartTime: { hour: 17, minute: 0 }
-        rampDownLoadBalancingAlgorithm: 'DepthFirst'
-        rampDownMinimumHostsPct: 10
-        rampDownCapacityThresholdPct: 90
-        rampDownWaitTimeMinutes: 30
-        rampDownStopHostsWhen: 'ZeroActiveSessions'
-        rampDownNotificationMessage: 'Your session will end in 30 minutes.'
-      }
-    ]
+    namePrefix: namePrefix
+    sessionHostCount: sessionHostCount
+    vmSize: vmSize
+    subnetId: subnetId
+    registrationToken: avd.outputs.registrationToken
+    fslogixProfilePath: deployStorage ? storage.outputs.profileSharePath : ''
+    adminUsername: adminUsername
+    adminPassword: adminPassword
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     tags: tags
   }
 }
 
 // ── Outputs ───────────────────────────────────────────────────────────────────
 
-output hostPoolId string = hostPool.outputs.resourceId
-output hostPoolName string = hostPool.outputs.name
-output appGroupId string = appGroup.outputs.resourceId
-output workspaceId string = workspace.outputs.resourceId
+output hostPoolId string = avd.outputs.hostPoolId
+output workspaceId string = avd.outputs.workspaceId
+output appGroupId string = avd.outputs.appGroupId
+output storageAccountName string = deployStorage ? storage.outputs.storageAccountName : ''
+output sessionHostNames array = deploySessionHosts ? sessionHosts.outputs.sessionHostNames : []
