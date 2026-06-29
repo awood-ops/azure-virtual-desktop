@@ -1,0 +1,59 @@
+name: Validate AVD Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      subscription_id:
+        description: Azure subscription ID
+        required: true
+      resource_group:
+        description: Resource group name
+        required: true
+      name_prefix:
+        description: Name prefix used at deploy time (e.g. avd-prd)
+        required: true
+      key_vault_name:
+        description: Key Vault name (optional — auto-discovered if omitted)
+        required: false
+      storage_account_name:
+        description: Storage account name (optional — auto-discovered if omitted)
+        required: false
+      expected_session_hosts:
+        description: Expected number of session hosts (0 = skip count check)
+        default: '0'
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Az modules
+        shell: pwsh
+        run: |
+          Install-Module Az.Accounts, Az.Resources, Az.Network, Az.KeyVault, Az.Storage, Az.DesktopVirtualization `
+            -Force -Scope CurrentUser -Repository PSGallery
+
+      - name: Run validation
+        shell: pwsh
+        run: |
+          $params = @{
+            SubscriptionId           = '${{ inputs.subscription_id }}'
+            ResourceGroupName        = '${{ inputs.resource_group }}'
+            NamePrefix               = '${{ inputs.name_prefix }}'
+            ExpectedSessionHostCount = ${{ inputs.expected_session_hosts }}
+          }
+          if ('${{ inputs.key_vault_name }}')       { $params.KeyVaultName       = '${{ inputs.key_vault_name }}' }
+          if ('${{ inputs.storage_account_name }}') { $params.StorageAccountName = '${{ inputs.storage_account_name }}' }
+          .\scripts\Test-AvdDeployment.ps1 @params
