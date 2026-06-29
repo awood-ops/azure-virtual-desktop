@@ -1,0 +1,47 @@
+name: Check AVM module versions
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # Every Monday at 08:00 UTC
+  workflow_dispatch:        # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-avm-versions:
+    name: Check and update AVM versions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check AVM versions against MCR
+        id: check
+        run: |
+          python3 scripts/Update-AvmVersions.py
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+
+      - name: Add job summary
+        if: always()
+        run: |
+          if [ -f avm-update-summary.md ]; then
+            cat avm-update-summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "All AVM modules are up to date." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Create pull request
+        if: steps.check.outputs.exit_code == '1'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/avm-version-updates
+          delete-branch: true
+          title: 'chore: update AVM module versions'
+          body-path: avm-update-summary.md
+          commit-message: 'chore: update AVM module versions to latest'
+          labels: dependencies,bicep
