@@ -125,12 +125,9 @@ module sessionHosts 'br/public:avm/res/compute/virtual-machine:0.11.0' = [
           ]
         }
       ]
-      // Entra ID join
-      extensionAadLoginForWindowsConfig: {
+      // Entra ID join (Entra-joined VMs)
+      extensionAadJoinConfig: {
         enabled: true
-        settings: {
-          mdmId: ''
-        }
       }
       // AVD agent + FSLogix via custom script extension
       extensionCustomScriptConfig: {
@@ -148,7 +145,6 @@ module sessionHosts 'br/public:avm/res/compute/virtual-machine:0.11.0' = [
             tags: tags
           }
         : { enabled: false }
-      monitoringWorkspaceResourceId: !empty(logAnalyticsWorkspaceId) ? logAnalyticsWorkspaceId : null
     }
   }
 ]
