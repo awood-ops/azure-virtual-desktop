@@ -8,7 +8,6 @@ on:
         required: true
         type: string
       location:
-        description: 'Azure region for test resources'
         required: false
         type: string
         default: uksouth
@@ -62,6 +61,35 @@ jobs:
           echo "rg=$(echo $output | jq -r '.resourceGroupName.value')" >> $GITHUB_OUTPUT
           echo "name_prefix=$(echo $output | jq -r '.moduleNamePrefix.value')" >> $GITHUB_OUTPUT
 
+      # ── Allow runner IP ─────────────────────────────────────────────────────
+      # Storage accounts deny public access by default. We temporarily add the
+      # runner's IP so Pester can perform data-plane checks, then remove it after.
+      - name: Allow runner IP on storage account
+        id: allow_ip
+        env:
+          NAME_PREFIX: ${{ steps.deploy.outputs.name_prefix }}
+          RG:          ${{ steps.deploy.outputs.rg }}
+        run: |
+          # Matches storage module: replace(toLower('${namePrefix}fslogix'), '-', '')[:24]
+          raw="${NAME_PREFIX}fslogix"
+          sa_name=$(echo "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '-')
+          sa_name="${sa_name:0:24}"
+
+          runner_ip=$(curl -sf https://api.ipify.org)
+
+          echo "Adding $runner_ip to $sa_name network rules"
+          az storage account network-rule add \
+            --account-name "$sa_name" \
+            --resource-group "$RG" \
+            --ip-address "$runner_ip"
+
+          # Wait for the rule to propagate before Pester runs
+          echo "Waiting 30s for rule propagation..."
+          sleep 30
+
+          echo "sa_name=$sa_name"   >> $GITHUB_OUTPUT
+          echo "runner_ip=$runner_ip" >> $GITHUB_OUTPUT
+
       # ── Pester ─────────────────────────────────────────────────────────────
       - name: Install Pester and Az modules
         shell: pwsh
@@ -82,8 +110,8 @@ jobs:
           TEST_NAME_PREFIX:  ${{ steps.deploy.outputs.name_prefix }}
         run: |
           $config = New-PesterConfiguration
-          $config.Run.Path        = 'tests/e2e/${{ inputs.scenario }}'
-          $config.Run.Exit        = $true
+          $config.Run.Path         = 'tests/e2e/${{ inputs.scenario }}'
+          $config.Run.Exit         = $true
           $config.Output.Verbosity = 'Detailed'
           $config.TestResult.Enabled      = $true
           $config.TestResult.OutputPath   = 'test-results-${{ inputs.scenario }}.xml'
@@ -97,10 +125,21 @@ jobs:
           name: test-results-${{ inputs.scenario }}
           path: test-results-${{ inputs.scenario }}.xml
 
+      # ── Remove runner IP ────────────────────────────────────────────────────
+      - name: Remove runner IP from storage account
+        if: always()
+        run: |
+          sa_name="${{ steps.allow_ip.outputs.sa_name }}"
+          runner_ip="${{ steps.allow_ip.outputs.runner_ip }}"
+          if [ -n "$sa_name" ] && [ -n "$runner_ip" ]; then
+            echo "Removing $runner_ip from $sa_name"
+            az storage account network-rule remove \
+              --account-name "$sa_name" \
+              --resource-group "${{ steps.deploy.outputs.rg }}" \
+              --ip-address "$runner_ip" || true
+          fi
+
       # ── Cleanup ─────────────────────────────────────────────────────────────
-      # Always runs — even if deploy or Pester failed — to avoid orphaned resources.
-      # Key Vault soft-delete means the KV name is reserved for 90 days; purge it
-      # immediately so the name is free for the next run.
       - name: Cleanup
         if: always()
         env:
