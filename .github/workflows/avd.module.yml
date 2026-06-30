@@ -54,7 +54,7 @@ jobs:
 
       - name: Compile Bicep to ARM
         run: |
-          bicep restore bicep/main.bicep
+          find bicep -name '*.bicep' | xargs -I{} bicep restore {}
           bicep build bicep/main.bicep --outdir /tmp/arm
 
       - name: Run PSRule for Azure
