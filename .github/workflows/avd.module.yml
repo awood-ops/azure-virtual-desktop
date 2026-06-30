@@ -53,7 +53,9 @@ jobs:
           chmod +x /tmp/bicep-cli && sudo mv /tmp/bicep-cli /usr/local/bin/bicep
 
       - name: Compile Bicep to ARM
-        run: bicep build bicep/main.bicep --outdir /tmp/arm
+        run: |
+          bicep restore bicep/main.bicep
+          bicep build bicep/main.bicep --outdir /tmp/arm
 
       - name: Run PSRule for Azure
         shell: pwsh
