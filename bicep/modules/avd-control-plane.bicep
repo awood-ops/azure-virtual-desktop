@@ -55,7 +55,7 @@ module appGroup 'br/public:avm/res/desktop-virtualization/application-group:0.2.
     location: location
     tags: tags
     applicationGroupType: 'Desktop'
-    hostPoolResourceId: hostPool.outputs.resourceId
+    hostpoolName: hostPool.outputs.name
     friendlyName: '${namePrefix} Desktop'
     diagnosticSettings: !empty(logAnalyticsWorkspaceId)
       ? [{ workspaceResourceId: logAnalyticsWorkspaceId }]
@@ -72,7 +72,7 @@ module workspace 'br/public:avm/res/desktop-virtualization/workspace:0.3.0' = {
     location: location
     tags: tags
     friendlyName: '${namePrefix} Workspace'
-    appGroupResourceIds: [ appGroup.outputs.resourceId ]
+    applicationGroupReferences: [ appGroup.outputs.resourceId ]
     diagnosticSettings: !empty(logAnalyticsWorkspaceId)
       ? [{ workspaceResourceId: logAnalyticsWorkspaceId }]
       : []
@@ -121,7 +121,7 @@ module scalingPlan 'br/public:avm/res/desktop-virtualization/scaling-plan:0.2.0'
 
 // ── Registration token (used by session-hosts module) ─────────────────────────
 
-var tokenExpiry = dateTimeAdd(utcNow(), 'PT2H')
+param tokenExpiry string = dateTimeAdd(utcNow(), 'PT2H')
 
 output hostPoolId string = hostPool.outputs.resourceId
 output hostPoolName string = hostPool.outputs.name
