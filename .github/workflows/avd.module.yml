@@ -1,0 +1,75 @@
+name: AVD Module — e2e Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bicep/**'
+      - 'tests/**'
+      - 'utilities/**'
+      - '.github/workflows/avd.module.yml'
+      - '.github/workflows/e2e.reusable.yml'
+  pull_request:
+    paths:
+      - 'bicep/**'
+      - 'tests/**'
+      - 'utilities/**'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Test scenario to run'
+        type: choice
+        options: [all, defaults, max]
+        default: all
+
+# Cancel in-progress runs on new pushes to the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # ── Static analysis — no Azure credentials needed ──────────────────────────
+  psrule:
+    name: PSRule for Azure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep CLI
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x ./bicep && sudo mv ./bicep /usr/local/bin/bicep
+
+      - name: Compile Bicep to ARM
+        run: bicep build bicep/main.bicep --outdir /tmp/arm
+
+      - name: Run PSRule for Azure
+        shell: pwsh
+        run: |
+          Install-Module PSRule.Rules.Azure -Force -Scope CurrentUser
+          $results = Invoke-PSRule -InputPath /tmp/arm -Module PSRule.Rules.Azure -Outcome Fail -As Summary
+          if ($results) {
+            $results | Format-Table -AutoSize
+            Write-Error "PSRule found $($results.Count) issue(s)"
+          }
+
+  # ── e2e: defaults scenario ─────────────────────────────────────────────────
+  defaults:
+    name: e2e / defaults
+    needs: psrule
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.scenario == 'all' || inputs.scenario == 'defaults' }}
+    uses: ./.github/workflows/e2e.reusable.yml
+    with:
+      scenario: defaults
+    secrets: inherit
+
+  # ── e2e: max scenario ──────────────────────────────────────────────────────
+  max:
+    name: e2e / max
+    needs: psrule
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.scenario == 'all' || inputs.scenario == 'max' }}
+    uses: ./.github/workflows/e2e.reusable.yml
+    with:
+      scenario: max
+    secrets: inherit
