@@ -49,8 +49,8 @@ jobs:
 
       - name: Install Bicep CLI
         run: |
-          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
-          chmod +x ./bicep && sudo mv ./bicep /usr/local/bin/bicep
+          curl -Lo /tmp/bicep-cli https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x /tmp/bicep-cli && sudo mv /tmp/bicep-cli /usr/local/bin/bicep
 
       - name: Compile Bicep to ARM
         run: bicep build bicep/main.bicep --outdir /tmp/arm
