@@ -21,8 +21,15 @@ on:
         type: choice
         options: [all, defaults, max]
         default: all
+      run_azqr:
+        description: 'Run AzQR best-practice scan (uploads report artifact)'
+        type: boolean
+        default: false
+      run_cost_estimate:
+        description: 'Run cost estimate (uploads pricing report artifact)'
+        type: boolean
+        default: false
 
-# Cancel in-progress runs on new pushes to the same branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -62,6 +69,8 @@ jobs:
     uses: ./.github/workflows/e2e.reusable.yml
     with:
       scenario: defaults
+      run_azqr: ${{ inputs.run_azqr || false }}
+      run_cost_estimate: ${{ inputs.run_cost_estimate || false }}
     secrets: inherit
 
   # ── e2e: max scenario ──────────────────────────────────────────────────────
@@ -72,4 +81,6 @@ jobs:
     uses: ./.github/workflows/e2e.reusable.yml
     with:
       scenario: max
+      run_azqr: ${{ inputs.run_azqr || false }}
+      run_cost_estimate: ${{ inputs.run_cost_estimate || false }}
     secrets: inherit
