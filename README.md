@@ -100,7 +100,6 @@ docs/
 └── Getting-Started.md           # Prerequisites, enrolment, user assignment
 
 scripts/
-├── Get-CostEstimate.ps1         # Retail Prices API cost estimate — used by e2e workflow
 └── Update-AvmVersions.py        # AVM version checker (used by GitHub Actions)
 
 tests/e2e/
