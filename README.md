@@ -55,7 +55,7 @@ flowchart LR
     Start([az deployment\ngroup create]) --> KV & Net & AVD
 
     KV{deployKeyVault} -->|true| KV1[Create Key Vault]
-    KV1 --> KV2[Generate &amp; store\nvm-admin-password]
+    KV1 --> KV2[Generate & store\nvm-admin-password]
 
     Net{deployNetworking} -->|true| Net1[VNet + Subnets\n+ NSG]
 
@@ -82,6 +82,8 @@ flowchart LR
 └── PR-Validation.yaml           # CI pipeline — validates Bicep on PRs
 
 .github/workflows/
+├── avd.module.yml               # e2e test trigger (PSRule + defaults/max matrix)
+├── e2e.reusable.yml             # Reusable e2e lifecycle (preflight → deploy → Pester → cleanup)
 └── check-avm-versions.yml       # Weekly AVM version check — auto-raises PRs
 
 bicep/
@@ -98,7 +100,16 @@ docs/
 └── Getting-Started.md           # Prerequisites, enrolment, user assignment
 
 scripts/
+├── Get-CostEstimate.ps1         # Retail Prices API cost estimate — used by e2e workflow
 └── Update-AvmVersions.py        # AVM version checker (used by GitHub Actions)
+
+tests/e2e/
+├── defaults/
+│   ├── main.test.bicep          # Minimal scenario — control plane, networking, KV, storage (no VMs)
+│   └── avd.defaults.test.ps1   # Pester v5 assertions for defaults scenario
+└── max/
+    ├── main.test.bicep          # Full scenario — all features, 1 session host
+    └── avd.max.test.ps1         # Pester v5 assertions for max scenario
 
 bicepconfig.json                 # AVM public registry alias
 ```
@@ -118,6 +129,88 @@ bicepconfig.json                 # AVM public registry alias
 | `avm/res/compute/virtual-machine` | 0.11.0 | Session host VMs |
 
 Check latest versions: [AVM Bicep Resource Modules](https://azure.github.io/Azure-Verified-Modules/indexes/bicep/bicep-resource-modules/)
+
+## CI / Testing
+
+Testing follows the [Azure Verified Modules e2e pattern](https://azure.github.io/Azure-Verified-Modules/contributing/bicep/bicep-contribution-flow/validate-bicep-module-locally/).
+
+### Pipeline overview
+
+```
+On push / PR (bicep/** or tests/**)
+│
+├── PSRule for Azure          Static analysis — compiles Bicep → ARM, runs best-practice rules.
+│                             No Azure credentials needed. Blocks e2e if it fails.
+│
+├── e2e / defaults            Deploys control plane + networking + KV + storage (no VMs).
+│                             Faster; validates the majority of the Bicep surface.
+│
+└── e2e / max                 Full deployment: everything including 1 session host + scaling plan.
+                              Slower; validates the session host provisioning path.
+```
+
+Each e2e job runs the same lifecycle via `e2e.reusable.yml`:
+
+```
+OIDC login → what-if preflight → deploy → [allow runner IP] →
+Pester assertions → [remove runner IP] → [AzQR] → [cost estimate] → cleanup
+```
+
+Dedicated resource groups (`dep-avdNNNN-avd-{scenario}`) are created per run and deleted after. Key Vaults are purged immediately to free the name for the next run.
+
+### Test scenarios
+
+| Scenario | `deploySessionHosts` | `deployScalingPlan` | Approx. duration |
+|---|---|---|---|
+| `defaults` | `false` | `false` | ~8 min |
+| `max` | `true` (1 VM) | `true` | ~20 min |
+
+### Pester assertions
+
+Each scenario has a `*.test.ps1` file that checks all deployed resources by name (derived from `namePrefix`) using the Az PowerShell modules. The storage file-share check uses `Get-AzStorageShare` with a temporary runner IP allowlist entry — added before Pester, removed after.
+
+### Optional analysis (workflow_dispatch only)
+
+When triggering via **Actions → AVD Module — e2e Tests → Run workflow**, two optional toggles are available:
+
+| Input | Description | Artifact |
+|---|---|---|
+| `run_azqr` | [AzQR](https://github.com/Azure/azqr) best-practice scan against deployed resources | `azqr-{scenario}/` (JSON + CSV) |
+| `run_cost_estimate` | Per-resource monthly cost estimate via [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices) | `cost-estimate-{scenario}/` (JSON + CSV + MD) |
+
+Both are opt-in and do not run on push or PR triggers. The cost estimate also writes a summary table to the GitHub Actions job summary.
+
+> **Note:** Cost Management actual charges appear 24–48 hours after resource creation. The cost estimate uses retail unit prices × assumed 730 hours/month and is indicative only.
+
+### Running tests locally
+
+```bash
+# Deploy the defaults scenario
+az deployment sub create \
+  --location uksouth \
+  --template-file tests/e2e/defaults/main.test.bicep \
+  --parameters namePrefix=avdlocal
+
+# Run Pester assertions (requires Az modules + Pester v5)
+$env:TEST_SUBSCRIPTION = '<your-sub-id>'
+$env:TEST_RG           = 'dep-avdlocal-avd-dfl'
+$env:TEST_NAME_PREFIX  = 'avdlocaldfl'
+Invoke-Pester ./tests/e2e/defaults -Output Detailed
+
+# Cleanup
+az group delete --name dep-avdlocal-avd-dfl --yes
+az keyvault purge --name avdlocaldfl-kv --location uksouth
+```
+
+### Required secrets
+
+The e2e workflows require these repository secrets (same as the existing validate workflow):
+
+| Secret | Description |
+|---|---|
+| `AZURE_CLIENT_ID` | App registration client ID for OIDC federation |
+| `AZURE_TENANT_ID` | Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Target subscription for test deployments |
 
 ## Quick start
 
@@ -157,3 +250,5 @@ az keyvault secret delete --vault-name avd-prd-kv --name vm-admin-password
 ## Contributing
 
 Changes go through a pull request. The PR validation pipeline runs `az bicep build` and a preflight `validate` before merge. AVM module versions are checked weekly and updated automatically via pull request.
+
+For changes to `bicep/` or `tests/`, the e2e workflows run automatically on the PR. Both `defaults` and `max` scenarios must pass before merge. PSRule for Azure runs as a pre-gate on all PRs.
