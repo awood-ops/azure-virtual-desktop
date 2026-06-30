@@ -1,4 +1,4 @@
-name: AVD Module Tests (sha-ref diagnostic)
+name: AVD Module Tests (simple diagnostic)
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
   defaults:
     name: e2e / defaults
     needs: psrule
-    uses: awood-ops/platform-workflows/.github/workflows/e2e.reusable.yml@2b059ee9cc8481fcbcd51d71f8c29ad49347c688
+    uses: awood-ops/platform-workflows/.github/workflows/e2e.reusable.yml@main
     with:
       scenario: defaults
     secrets: inherit
