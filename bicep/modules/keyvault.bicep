@@ -22,6 +22,12 @@ resource deploymentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@20
 
 // ── Key Vault ─────────────────────────────────────────────────────────────────
 
+var readerAssignments = [for id in readerPrincipalIds: {
+  principalId: id
+  roleDefinitionIdOrName: 'Key Vault Secrets User'
+  principalType: 'ServicePrincipal'
+}]
+
 module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
   name: 'keyvault'
   params: {
@@ -34,7 +40,6 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
     softDeleteRetentionInDays: 90
     enablePurgeProtection: false   // set true for production
     roleAssignments: union(
-      // deployment script identity needs Secrets Officer to create the password secret
       [
         {
           principalId: deploymentIdentity.properties.principalId
@@ -42,12 +47,7 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.9.0' = {
           principalType: 'ServicePrincipal'
         }
       ],
-      // optional: grant read access to additional principals (e.g. the session host MSI)
-      [for id in readerPrincipalIds: {
-        principalId: id
-        roleDefinitionIdOrName: 'Key Vault Secrets User'
-        principalType: 'ServicePrincipal'
-      }]
+      readerAssignments
     )
   }
 }
