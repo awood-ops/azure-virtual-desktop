@@ -17,12 +17,13 @@ BeforeAll {
 
     # Derive resource names from module naming conventions
     $p = $script:namePrefix
-    $script:vnetName     = "$p-vnet"
-    $script:kvName       = "$p-kv"
-    $script:hpName       = "$p-hp"
-    $script:dagName      = "$p-dag"
-    $script:wsName       = "$p-ws"
-    $script:saName       = ($p -replace '-', '').ToLower() + 'fslogix'
+    $script:vnetName = "$p-vnet"
+    $script:kvName   = "$p-kv"
+    $script:hpName   = "$p-hp"
+    $script:dagName  = "$p-dag"
+    $script:wsName   = "$p-ws"
+    # Storage name: toLower(namePrefix + 'fslogix'), hyphens removed, max 24 chars
+    $script:saName   = (($p + 'fslogix') -replace '-', '').ToLower()
     if ($script:saName.Length -gt 24) { $script:saName = $script:saName.Substring(0, 24) }
 
     $script:resourceGroup = Get-AzResourceGroup -Name $script:rg -ErrorAction SilentlyContinue
@@ -76,13 +77,10 @@ Describe 'Storage (FSLogix)' {
         $script:sa.Sku.Name | Should -Be 'Premium_LRS'
     }
     It 'FSLogix profile share should exist' {
-        # File shares are checked via the ARM management plane (bypasses network deny rules)
-        $token  = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com/').Token
-        $uri    = "https://management.azure.com/subscriptions/$($script:sub)/resourceGroups/$($script:rg)" +
-                  "/providers/Microsoft.Storage/storageAccounts/$($script:saName)" +
-                  '/fileServices/default/shares?api-version=2023-01-01'
-        $result = Invoke-RestMethod -Uri $uri -Headers @{ Authorization = "Bearer $token" } -ErrorAction SilentlyContinue
-        $result.value.Count | Should -BeGreaterThan 0
+        $key    = (Get-AzStorageAccountKey -ResourceGroupName $script:rg -Name $script:saName)[0].Value
+        $ctx    = New-AzStorageContext -StorageAccountName $script:saName -StorageAccountKey $key
+        $shares = Get-AzStorageShare -Context $ctx -ErrorAction SilentlyContinue
+        $shares.Count | Should -BeGreaterThan 0
     }
 }
 
