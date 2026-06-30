@@ -50,7 +50,11 @@ module storageAccount 'br/public:avm/res/storage/storage-account:0.14.0' = {
             subnetResourceId: privateEndpointSubnetId
             service: 'file'
             privateDnsZoneGroup: {
-              privateDNSResourceIds: [ privateDnsZoneResourceId ]
+              privateDnsZoneGroupConfigs: [
+                {
+                  privateDnsZoneResourceId: privateDnsZoneResourceId
+                }
+              ]
             }
           }
         ]
