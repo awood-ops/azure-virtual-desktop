@@ -1,0 +1,116 @@
+name: AVD e2e — Reusable
+
+on:
+  workflow_call:
+    inputs:
+      scenario:
+        description: 'Test scenario folder name (e.g. defaults, max)'
+        required: true
+        type: string
+      location:
+        description: 'Azure region for test resources'
+        required: false
+        type: string
+        default: uksouth
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  e2e:
+    name: ${{ inputs.scenario }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Preflight ───────────────────────────────────────────────────────────
+      - name: Preflight (what-if)
+        run: |
+          az deployment sub what-if \
+            --name "e2e-avd${{ github.run_number }}-${{ inputs.scenario }}" \
+            --location "${{ inputs.location }}" \
+            --template-file "tests/e2e/${{ inputs.scenario }}/main.test.bicep" \
+            --parameters namePrefix="avd${{ github.run_number }}" location="${{ inputs.location }}"
+
+      # ── Deploy ──────────────────────────────────────────────────────────────
+      - name: Deploy
+        id: deploy
+        run: |
+          output=$(az deployment sub create \
+            --name "e2e-avd${{ github.run_number }}-${{ inputs.scenario }}" \
+            --location "${{ inputs.location }}" \
+            --template-file "tests/e2e/${{ inputs.scenario }}/main.test.bicep" \
+            --parameters namePrefix="avd${{ github.run_number }}" location="${{ inputs.location }}" \
+            --query "properties.outputs" -o json)
+
+          echo "rg=$(echo $output | jq -r '.resourceGroupName.value')" >> $GITHUB_OUTPUT
+          echo "name_prefix=$(echo $output | jq -r '.moduleNamePrefix.value')" >> $GITHUB_OUTPUT
+
+      # ── Pester ─────────────────────────────────────────────────────────────
+      - name: Install Pester and Az modules
+        shell: pwsh
+        run: |
+          Install-Module Pester                     -Force -Scope CurrentUser -MinimumVersion 5.0
+          Install-Module Az.Accounts                -Force -Scope CurrentUser
+          Install-Module Az.Resources               -Force -Scope CurrentUser
+          Install-Module Az.Network                 -Force -Scope CurrentUser
+          Install-Module Az.KeyVault                -Force -Scope CurrentUser
+          Install-Module Az.Storage                 -Force -Scope CurrentUser
+          Install-Module Az.DesktopVirtualization   -Force -Scope CurrentUser
+
+      - name: Run Pester tests
+        shell: pwsh
+        env:
+          TEST_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TEST_RG:           ${{ steps.deploy.outputs.rg }}
+          TEST_NAME_PREFIX:  ${{ steps.deploy.outputs.name_prefix }}
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path        = 'tests/e2e/${{ inputs.scenario }}'
+          $config.Run.Exit        = $true
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled      = $true
+          $config.TestResult.OutputPath   = 'test-results-${{ inputs.scenario }}.xml'
+          $config.TestResult.OutputFormat = 'JUnitXml'
+          Invoke-Pester -Configuration $config
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ inputs.scenario }}
+          path: test-results-${{ inputs.scenario }}.xml
+
+      # ── Cleanup ─────────────────────────────────────────────────────────────
+      # Always runs — even if deploy or Pester failed — to avoid orphaned resources.
+      # Key Vault soft-delete means the KV name is reserved for 90 days; purge it
+      # immediately so the name is free for the next run.
+      - name: Cleanup
+        if: always()
+        env:
+          RG: ${{ steps.deploy.outputs.rg }}
+          KV: ${{ steps.deploy.outputs.name_prefix }}-kv
+        run: |
+          if [ -n "$RG" ]; then
+            echo "Deleting resource group: $RG"
+            az group delete --name "$RG" --yes --no-wait || true
+
+            echo "Purging soft-deleted Key Vault: $KV"
+            az keyvault purge --name "$KV" --location "${{ inputs.location }}" 2>/dev/null || true
+          fi
