@@ -4,13 +4,20 @@ on:
   workflow_call:
     inputs:
       scenario:
-        description: 'Test scenario folder name (e.g. defaults, max)'
         required: true
         type: string
       location:
         required: false
         type: string
         default: uksouth
+      run_azqr:
+        description: 'Run AzQR best-practice scan'
+        type: boolean
+        default: false
+      run_cost_estimate:
+        description: 'Run cost estimate using Azure Retail Prices API'
+        type: boolean
+        default: false
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -58,23 +65,19 @@ jobs:
             --parameters namePrefix="avd${{ github.run_number }}" location="${{ inputs.location }}" \
             --query "properties.outputs" -o json)
 
-          echo "rg=$(echo $output | jq -r '.resourceGroupName.value')" >> $GITHUB_OUTPUT
-          echo "name_prefix=$(echo $output | jq -r '.moduleNamePrefix.value')" >> $GITHUB_OUTPUT
+          echo "rg=$(echo $output | jq -r '.resourceGroupName.value')"           >> $GITHUB_OUTPUT
+          echo "name_prefix=$(echo $output | jq -r '.moduleNamePrefix.value')"   >> $GITHUB_OUTPUT
 
       # ── Allow runner IP ─────────────────────────────────────────────────────
-      # Storage accounts deny public access by default. We temporarily add the
-      # runner's IP so Pester can perform data-plane checks, then remove it after.
       - name: Allow runner IP on storage account
         id: allow_ip
         env:
           NAME_PREFIX: ${{ steps.deploy.outputs.name_prefix }}
           RG:          ${{ steps.deploy.outputs.rg }}
         run: |
-          # Matches storage module: replace(toLower('${namePrefix}fslogix'), '-', '')[:24]
           raw="${NAME_PREFIX}fslogix"
           sa_name=$(echo "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '-')
           sa_name="${sa_name:0:24}"
-
           runner_ip=$(curl -sf https://api.ipify.org)
 
           echo "Adding $runner_ip to $sa_name network rules"
@@ -83,24 +86,23 @@ jobs:
             --resource-group "$RG" \
             --ip-address "$runner_ip"
 
-          # Wait for the rule to propagate before Pester runs
           echo "Waiting 30s for rule propagation..."
           sleep 30
 
-          echo "sa_name=$sa_name"   >> $GITHUB_OUTPUT
+          echo "sa_name=$sa_name"     >> $GITHUB_OUTPUT
           echo "runner_ip=$runner_ip" >> $GITHUB_OUTPUT
 
       # ── Pester ─────────────────────────────────────────────────────────────
       - name: Install Pester and Az modules
         shell: pwsh
         run: |
-          Install-Module Pester                     -Force -Scope CurrentUser -MinimumVersion 5.0
-          Install-Module Az.Accounts                -Force -Scope CurrentUser
-          Install-Module Az.Resources               -Force -Scope CurrentUser
-          Install-Module Az.Network                 -Force -Scope CurrentUser
-          Install-Module Az.KeyVault                -Force -Scope CurrentUser
-          Install-Module Az.Storage                 -Force -Scope CurrentUser
-          Install-Module Az.DesktopVirtualization   -Force -Scope CurrentUser
+          Install-Module Pester                   -Force -Scope CurrentUser -MinimumVersion 5.0
+          Install-Module Az.Accounts              -Force -Scope CurrentUser
+          Install-Module Az.Resources             -Force -Scope CurrentUser
+          Install-Module Az.Network               -Force -Scope CurrentUser
+          Install-Module Az.KeyVault              -Force -Scope CurrentUser
+          Install-Module Az.Storage               -Force -Scope CurrentUser
+          Install-Module Az.DesktopVirtualization -Force -Scope CurrentUser
 
       - name: Run Pester tests
         shell: pwsh
@@ -119,7 +121,7 @@ jobs:
           Invoke-Pester -Configuration $config
 
       - name: Upload test results
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ inputs.scenario }}
@@ -127,7 +129,7 @@ jobs:
 
       # ── Remove runner IP ────────────────────────────────────────────────────
       - name: Remove runner IP from storage account
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           sa_name="${{ steps.allow_ip.outputs.sa_name }}"
           runner_ip="${{ steps.allow_ip.outputs.runner_ip }}"
@@ -139,9 +141,63 @@ jobs:
               --ip-address "$runner_ip" || true
           fi
 
+      # ── AzQR ───────────────────────────────────────────────────────────────
+      - name: AzQR scan
+        id: azqr
+        if: ${{ inputs.run_azqr }}
+        env:
+          RG:  ${{ steps.deploy.outputs.rg }}
+          SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          echo "Downloading AzQR..."
+          url=$(curl -sf https://api.github.com/repos/Azure/azqr/releases/latest \
+            | jq -r '.assets[] | select(.name | test("linux.*amd64|linux.*x86_64"; "i")) | .browser_download_url' \
+            | head -1)
+          curl -Lo azqr "$url" && chmod +x azqr
+
+          mkdir -p azqr-results
+          ./azqr scan \
+            --subscription-id "$SUB" \
+            --resource-group  "$RG"  \
+            --output-path     ./azqr-results \
+            --mask false || true
+
+      - name: Upload AzQR report
+        if: ${{ inputs.run_azqr && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: azqr-${{ inputs.scenario }}
+          path: azqr-results/
+
+      # ── Cost estimate ───────────────────────────────────────────────────────
+      - name: Install Az.Compute for cost estimate
+        if: ${{ inputs.run_cost_estimate }}
+        shell: pwsh
+        run: Install-Module Az.Compute -Force -Scope CurrentUser
+
+      - name: Run cost estimate
+        if: ${{ inputs.run_cost_estimate }}
+        shell: pwsh
+        env:
+          TEST_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TEST_RG:           ${{ steps.deploy.outputs.rg }}
+        run: |
+          Set-AzContext -SubscriptionId $env:TEST_SUBSCRIPTION | Out-Null
+          ./scripts/Get-CostEstimate.ps1 \
+            -ResourceGroupName $env:TEST_RG \
+            -Location          '${{ inputs.location }}' \
+            -OutputPath        ./cost-estimate-results
+
+      - name: Upload cost estimate
+        if: ${{ inputs.run_cost_estimate && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cost-estimate-${{ inputs.scenario }}
+          path: cost-estimate-results/
+
       # ── Cleanup ─────────────────────────────────────────────────────────────
       - name: Cleanup
-        if: always()
+        if: ${{ !cancelled() }}
         env:
           RG: ${{ steps.deploy.outputs.rg }}
           KV: ${{ steps.deploy.outputs.name_prefix }}-kv
