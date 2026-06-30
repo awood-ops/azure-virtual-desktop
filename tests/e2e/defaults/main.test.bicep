@@ -54,3 +54,4 @@ module avd '../../../bicep/main.bicep' = {
 
 output resourceGroupName string = testRg.name
 output moduleNamePrefix  string = moduleNamePrefix
+
