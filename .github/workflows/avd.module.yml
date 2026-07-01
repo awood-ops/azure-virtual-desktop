@@ -71,7 +71,7 @@ jobs:
   defaults:
     name: e2e / defaults
     needs: psrule
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.scenario == 'all' || inputs.scenario == 'defaults' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || inputs.scenario == 'all' || inputs.scenario == 'defaults') }}
     uses: awood-ops/platform-workflows/.github/workflows/e2e.reusable.yml@main
     with:
       scenario: defaults
@@ -85,7 +85,7 @@ jobs:
   max:
     name: e2e / max
     needs: psrule
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.scenario == 'all' || inputs.scenario == 'max' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.event_name != 'workflow_dispatch' || inputs.scenario == 'all' || inputs.scenario == 'max') }}
     uses: awood-ops/platform-workflows/.github/workflows/e2e.reusable.yml@main
     with:
       scenario: max
